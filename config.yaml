@@ -1,0 +1,61 @@
+# Configuration file for the thermal ranges application
+# Use this file if you want to run the application through the command line
+
+###### CORE SETTINGS ######
+# Where to source the occurrence data
+# One of `api` (use OBIS API), `speciesgrids` (use the speciesgrids product) or
+# `full` to use the full export
+occ_source: api
+
+# Species list - for which species to calculate the thermal ranges
+# Can be either a scientific name, AphiaID, a path to a CSV/TSV/TXT file 
+# or a path to a directory containing CSV/TSV/TXT files.
+# If you want to get the thermal ranges for all species within an area of interest,
+# supply the AOI and set this as null (species: null)
+species: 141433
+
+# Area of interest - check species occurring in a specific area
+# for which to calculate the thermal ranges. Ignored if the species argument is set.
+# Path to a shapefile (GeoPackage, GeoJSON) containing the area of interest or a WKT geometry
+aoi: null
+
+# Output directory - where to save the results
+output_dir: results
+
+# Outpute file name - name of the output file
+# If multiple lists are provided, the output file will be named as
+# [output_filename]_[species_list_name].[output_format]
+output_filename: thermal_ranges
+
+# Output format - format of the output files
+output_format: csv
+
+
+###### FUTURE DATA SETTINGS ######
+# Return future temperature data
+future_temperature: false
+
+# Sites to extract future temperature data
+# Path to a shapefile (GeoPackage, GeoJSON) or a WKT geometry
+future_sites: null
+
+# Mode of extracting future temperature data
+# One of `centroid` to get the centroid of the AOI, `sample`, to sample points within the AOI,
+# or `full` to extract temperature at all points within the AOI
+future_mode: centroid
+
+# Future period
+# Decade to which to extract the future temperature data
+# Can be a single value or a range (e.g. 2020-2030)
+future_period: 2100
+
+# Future scenarios
+# One or more future scenarios to extract the future temperature data for
+# (should be one of the SSP scenarios - ignore case)
+future_scenarios:
+  - SSP1
+  - SSP2
+  - SSP3
+  - SSP4
+  - SSP5
+
