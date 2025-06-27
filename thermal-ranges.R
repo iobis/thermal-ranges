@@ -1,18 +1,15 @@
+# Get thermal ranges for all species within the speciesgrids product
+source("get-ranges-fun.R")
 
-
-# Load configuration file
-config <- yaml::read_yaml("config.yaml")
+# Download the species grids if not existent
+grids_path <- "data/speciesgrids/h3_7"
+if (dir.exists(grids_path)) {
+    # TODO: add download code
+}
 
 get_thermal_ranges(
-    occ_source = config$occ_source,
-    species = config$species,
-    aoi = config$aoi,
-    output_dir = config$output_dir,
-    output_filename = config$output_filename,
-    output_format = config$output_format,
-    future_temperature = config$future_temperature,
-    future_sites = config$future_sites,
-    future_mode = config$future_mode,
-    future_period = config$future_period,
-    future_scenarios = config$future_scenarios
+    occ_source = "speciesgrids",
+    occ_path = grids_path,
+    species = "all",
+    min_records = 10
 )
