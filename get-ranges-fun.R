@@ -12,6 +12,7 @@
 #' You can also set this to NULL. In that case, you should pass an `aoi` to get
 #' all species within the area of interest.
 #' @param min_records minimum records available to proceed and calculate the thermal ranges
+#' @param min_year minimum year to get the records
 #' @param aoi a WKT string or a path to a shapefile containing an area of interest
 #' at which to get the species list for calculating the thermal ranges
 #' @param output_dir the output directory. If non existent, it will be created.
@@ -27,6 +28,7 @@ get_thermal_ranges <- function(
     occ_path = NULL,
     species,
     min_records = 10,
+    min_year = 1950,
     aoi = NULL,
     output_dir = "results",
     output_filename = paste0("thermal_ranges_", format(Sys.Date(), "%Y%m%d")),
@@ -94,7 +96,7 @@ get_thermal_ranges <- function(
     }
 
     # Get temperature data
-    sp_temps <- .get_temperature(species, occ_source, occ_path)
+    sp_temps <- .get_temperature(species, occ_source, occ_path, min_year)
 
     # Save results
     fs::dir_create(output_dir)
@@ -127,12 +129,13 @@ get_thermal_ranges <- function(
 # @param occ_source where to get occurrence data
 # @param occ_path path, if `occ_source` is 'speciesgrids' or 'full'
 # @param mult_mode if there are NA values, it will try to get from 8 adjacent cells.
+# @param min_year minimum year to get the records
 # If mult_mode is distance and more than one adjacent point is valid,
 # than it get the closest of the valid points. Otherwise, it samples one point.
 #
 # @return data.frame
 #' @export
-.get_temperature <- function(species, occ_source, occ_path, mult_mode = "distance") {
+.get_temperature <- function(species, occ_source, occ_path, min_year = 1950, mult_mode = "distance") {
 
     cli::cli_alert_info("Loading environmental layers")
     sst <- .load_temperature()
@@ -154,7 +157,8 @@ get_thermal_ranges <- function(
 
         if (occ_source == "api") {
             occurrences <- robis::occurrence(
-                taxonid = group_species
+                taxonid = group_species,
+                startdate = as.Date(paste0(min_year, "-01-01"))
             )
             occurrences <- occurrences |>
                 select(species = scientificName, AphiaID = aphiaID, decimalLongitude, decimalLatitude) |>
@@ -167,7 +171,7 @@ get_thermal_ranges <- function(
             occurrences <- DBI::dbGetQuery(con, glue::glue(
                 "select species, AphiaID, h3_cell_to_lng(cell) as lng, h3_cell_to_lat(cell) as lat
                 from read_parquet('{occ_path}')
-                where AphiaID in ({paste(group_species, collapse = ',')})
+                where AphiaID in ({paste(group_species, collapse = ',')}) and min_year >= {min_year}
                 "
             ))
             DBI::dbDisconnect(con)
@@ -184,41 +188,68 @@ get_thermal_ranges <- function(
         # Fill NAssummarise
         is_na <- which(is.na(unique_cells$surface))
         if (length(is_na) > 0) {
-            na_adjs <- terra::adjacent(sst$surface, unique_cells$cell[is_na], directions = "queen")
-            na_adjs <- as.vector(t(na_adjs))
-            na_adjs_v <- terra::extract(sst$surface, na_adjs)[,1]
-            na_adjs_v <- matrix(data = na_adjs_v, ncol = 8, nrow = length(is_na), byrow = T)
-            na_adjs <- matrix(data = na_adjs, ncol = 8, nrow = length(is_na), byrow = T)
 
-            unique_new <- lapply(seq_len(nrow(na_adjs_v)), \(nr){
-                adj_v <- na_adjs_v[nr,]
-                if (sum(!is.na(adj_v)) == 1) {
-                    new_cell <- na_adjs[nr,][!is.na(adj_v)]
-                    cbind(cell = unique_cells$cell[is_na[nr]], new_cell = new_cell)
-                } else if (sum(!is.na(adj_v)) > 1) {
-                    new_cell <- na_adjs[nr,][!is.na(adj_v)]
-                    if (mult_mode == "distance") {
-                        dists <- terra::distance(
-                            terra::vect(terra::xyFromCell(sst, unique_cells$cell[is_na[nr]]), crs = "EPSG:4326"),
-                            terra::vect(terra::xyFromCell(sst, new_cell), crs = "EPSG:4326")
-                        )
-                        cbind(
-                            cell = unique_cells$cell[is_na[nr]],
-                            new_cell = new_cell[which.min(dists)]
-                        )
+            na_done <- data.frame(cell = 0, new_cell = 0)[0,]
+            if (exists("pre_proc")) {
+                na_done <- pre_proc[pre_proc$cell %in% unique_cells$cell[is_na], ]
+                is_na <- is_na[!unique_cells$cell[is_na] %in% pre_proc$cell]
+            }
+
+            if (length(is_na) > 0) {
+                na_adjs <- terra::adjacent(sst$surface, unique_cells$cell[is_na], directions = "queen")
+                na_adjs <- as.vector(t(na_adjs))
+                na_adjs_v <- terra::extract(sst$surface, na_adjs)[,1]
+                na_adjs_v <- matrix(data = na_adjs_v, ncol = 8, nrow = length(is_na), byrow = T)
+                na_adjs <- matrix(data = na_adjs, ncol = 8, nrow = length(is_na), byrow = T)
+
+                unique_new <- lapply(seq_len(nrow(na_adjs_v)), \(nr){
+                    adj_v <- na_adjs_v[nr,]
+                    if (sum(!is.na(adj_v)) == 1) {
+                        new_cell <- na_adjs[nr,][!is.na(adj_v)]
+                        cbind(cell = unique_cells$cell[is_na[nr]], new_cell = new_cell)
+                    } else if (sum(!is.na(adj_v)) > 1) {
+                        new_cell <- na_adjs[nr,][!is.na(adj_v)]
+                        if (mult_mode == "distance") {
+                            dists <- terra::distance(
+                                terra::vect(terra::xyFromCell(sst, unique_cells$cell[is_na[nr]]), crs = "EPSG:4326"),
+                                terra::vect(terra::xyFromCell(sst, new_cell), crs = "EPSG:4326")
+                            )
+                            cbind(
+                                cell = unique_cells$cell[is_na[nr]],
+                                new_cell = new_cell[which.min(dists)]
+                            )
+                        } else {
+                            new_cell <- sample(new_cell, 1)
+                            cbind(
+                                cell = unique_cells$cell[is_na[nr]],
+                                new_cell = new_cell
+                            )
+                        }
                     } else {
-                        new_cell <- sample(new_cell, 1)
-                        cbind(
-                            cell = unique_cells$cell[is_na[nr]],
-                            new_cell = new_cell
-                        )
+                        cbind(cell = unique_cells$cell[is_na[nr]], new_cell = unique_cells$cell[is_na[nr]])
                     }
+                })
+                unique_new <- do.call("rbind", unique_new)
+                unique_new <- as.data.frame(unique_new) |>
+                    bind_rows(na_done)
+
+                # Input new cells values on old
+                unique_new <- unique_new |> 
+                    distinct(cell, .keep_all = T)
+                if (exists("pre_proc")) {
+                    pre_proc <- pre_proc |>
+                        bind_rows(unique_new) |>
+                        distinct(cell, .keep_all = T)
                 } else {
-                    cbind(cell = unique_cells$cell[is_na[nr]], new_cell = unique_cells$cell[is_na[nr]])
+                    pre_proc <- unique_new
                 }
-            })
-            unique_new <- do.call("rbind", unique_new)
-            extracted_sst <- dplyr::left_join(extracted_sst, as.data.frame(unique_new), by = "cell")
+            } else {
+                unique_new <- na_done
+            }
+
+            extracted_sst <- dplyr::left_join(extracted_sst, unique_new, by = "cell")
+
+            extracted_sst$new_cell[is.na(extracted_sst$new_cell)] <- extracted_sst$cell[is.na(extracted_sst$new_cell)]
 
             extracted_sst <- terra::extract(sst, extracted_sst$new_cell)
         }
@@ -227,15 +258,24 @@ get_thermal_ranges <- function(
 
         surface <- occurrences |>
             select(aphiaID = AphiaID, species, temperature = surface) |>
-            .prepare_tr_table()
-        colnames(surface)[3:10] <- paste0("surface_", colnames(surface)[3:10])
+            .prepare_tr_table() |>
+            .add_confidence(layer = sst, target = "surface")
+        colnames(surface)[2:length(surface)] <- paste0("surface_", colnames(surface)[2:length(surface)])
 
         bottom <- occurrences |>
             select(aphiaID = AphiaID, species, temperature = bottom) |>
-            .prepare_tr_table()
-        colnames(bottom)[3:10] <- paste0("bottom_", colnames(bottom)[3:10])
+            .prepare_tr_table() |>
+            .add_confidence(layer = sst, target = "bottom")
+        colnames(bottom)[2:length(bottom)] <- paste0("bottom_", colnames(bottom)[2:length(bottom)])
 
-        results[[id]] <- left_join(surface, bottom, by = "aphiaID")
+        unique_aphias <- species |>
+            filter(group == id) |>
+            select(aphiaID, species)
+
+        results[[id]] <- unique_aphias |>
+            left_join(surface, by = "aphiaID") |>
+            left_join(bottom, by = "aphiaID")
+
     }
 
     return(bind_rows(results))
@@ -250,14 +290,16 @@ get_thermal_ranges <- function(
 #' @export
 .prepare_tr_table <- function(occ_data) {
     occ_data |>
-        group_by(aphiaID, species) |>
+        group_by(aphiaID) |>
         summarise(
+            min = ifelse(all(is.na(temperature)), NA, min(temperature, na.rm = TRUE)),
             q01 = quantile(temperature, 0.01, na.rm = TRUE),
             q05 = quantile(temperature, 0.05, na.rm = TRUE),
             q50 = quantile(temperature, 0.5, na.rm = TRUE),
             q95 = quantile(temperature, 0.95, na.rm = TRUE),
             q99 = quantile(temperature, 0.99, na.rm = TRUE),
-            mean = mean(temperature, na.rm = TRUE),
+            max = ifelse(all(is.na(temperature)), NA, max(temperature, na.rm = TRUE)),
+            mean = ifelse(all(is.na(temperature)), NA, mean(temperature, na.rm = TRUE)),
             sd = sd(temperature, na.rm = TRUE),
             na_count = sum(is.na(temperature)),
             valid_count = sum(!is.na(temperature)),
@@ -322,7 +364,8 @@ get_thermal_ranges <- function(
         )
         species_list <- species_list |>
             filter(records >= min_records) |>
-            select(aphiaID = taxonID, species = scientificName, records)
+            select(aphiaID = taxonID, species = scientificName, records) |>
+            distinct(aphiaID, .keep_all = T)
     } else if (occ_source == "full") {
         # TODO
     } else if (occ_source == "speciesgrids") {
@@ -350,7 +393,8 @@ get_thermal_ranges <- function(
         DBI::dbDisconnect(con)
 
         species_list <- occ_data |>
-            select(aphiaID = AphiaID, species, records = total)
+            select(aphiaID = AphiaID, species, records = total) |>
+            distinct(aphiaID, .keep_all = T)
     } else {
         cli::cli_abort("`occ_source` invalid")
     }
@@ -411,5 +455,34 @@ get_thermal_ranges <- function(
     cum_sum <- cumsum(species_list$records)
     batch_id <- cumsum(c(1, diff(cum_sum %/% 100000)) > 0)
     species_list$group <- batch_id
+    return(species_list)
+}
+
+
+# Add a confidence note
+#
+# @param species_list the species list
+# @param layer SST SpatRaster
+# @param target to which layer to get confidence
+#
+# @return
+#' @export
+.add_confidence <- function(species_list, layer, target) {
+    layer <- terra::minmax(layer[[target]])
+    layer <- layer["max",]
+
+    species_list <- species_list |>
+        mutate(
+            upper_lim = layer - max
+        ) |>
+        mutate(
+            confidence = ifelse(upper_lim == 0, "close-to-limit-0",
+                ifelse(upper_lim <= 0.5, "close-to-limit-0.5",
+                    ifelse(upper_lim <= 1, "close-to-limit-1", "ok")
+                )
+            )
+        ) |>
+        select(-upper_lim)
+
     return(species_list)
 }
