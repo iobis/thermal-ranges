@@ -1,0 +1,12 @@
+data.table
+arrow
+dplyr
+terra
+DBI
+duckdb
+glue
+tidyr
+robis
+tools
+cli
+worrms
